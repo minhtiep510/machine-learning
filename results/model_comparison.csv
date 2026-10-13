@@ -1,0 +1,5 @@
+Model,Accuracy,F1_Macro,Log_Loss
+Logistic Regression,0.4554,0.3701,1.0743
+Random Forest,0.4682,0.3644,1.0513
+SVM (RBF Kernel),0.4682,0.363,1.0681
+XGBoost,0.4586,0.3723,1.0884
