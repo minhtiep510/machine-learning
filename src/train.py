@@ -6,8 +6,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
@@ -31,6 +33,33 @@ if sys.platform == "win32":
         pass
 
 
+# Wrapper tương thích Scikit-Learn để gộp xác suất (Soft Voting) giữa XGBoost và Neural Network
+class WeightedEnsembleClassifier(BaseEstimator, ClassifierMixin):
+    def __init__(self, models_weights):
+        """
+        models_weights: list các tuple (tên_mô_hình, đối_tượng_mô_hình, trọng_số)
+        """
+        self.models_weights = models_weights
+
+    def fit(self, X, y):
+        # Các mô hình con đã được huấn luyện sẵn trong vòng lặp chính nên không cần fit lại
+        self.classes_ = np.unique(y)
+        return self
+
+    def predict_proba(self, X):
+        total_proba = None
+        for _, model, weight in self.models_weights:
+            proba = model.predict_proba(X)
+            if total_proba is None:
+                total_proba = weight * proba
+            else:
+                total_proba += weight * proba
+        return total_proba
+
+    def predict(self, X):
+        return np.argmax(self.predict_proba(X), axis=1)
+
+
 def train_and_compare_models():
     # 1. Tải và xử lý dữ liệu
     df = load_and_merge_data("data")
@@ -52,8 +81,42 @@ def train_and_compare_models():
         f"[THÔNG BÁO] Số mẫu kiểm thử (Test):     {len(X_test)} trận (Các trận tiếp theo trong tương lai)"
     )
 
-    # 3. Khởi tạo 4 mô hình trọng tâm
+    # 3. Khởi tạo 5 mô hình cơ sở (thêm Neural Network MLP)
     # Target: 0: Chủ nhà thắng (H), 1: Hòa (D), 2: Đội khách thắng (A)
+    mlp_pipeline = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "clf",
+                MLPClassifier(
+                    hidden_layer_sizes=(64, 32),  # 2 lớp ẩn gọn nhẹ chống overfitting
+                    activation="relu",
+                    solver="adam",
+                    alpha=0.1,  # L2 regularization mạnh để giảm nhiễu dữ liệu bóng đá
+                    batch_size=32,
+                    learning_rate_init=0.001,
+                    max_iter=300,
+                    early_stopping=True,  # Tự dừng nếu validation loss không giảm
+                    validation_fraction=0.15,
+                    n_iter_no_change=15,
+                    random_state=42,
+                ),
+            ),
+        ]
+    )
+
+    xgb_model = xgb.XGBClassifier(
+        n_estimators=150,
+        max_depth=4,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        objective="multi:softprob",
+        eval_metric="mlogloss",
+        random_state=42,
+        n_jobs=-1,
+    )
+
     models = {
         "Logistic Regression": Pipeline(
             [
@@ -80,16 +143,14 @@ def train_and_compare_models():
                 ("clf", SVC(kernel="rbf", C=1.0, probability=True, random_state=42)),
             ]
         ),
-        "XGBoost": xgb.XGBClassifier(
-            n_estimators=150,
-            max_depth=4,
-            learning_rate=0.05,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            objective="multi:softprob",
-            eval_metric="mlogloss",
-            random_state=42,
-            n_jobs=-1,
+        "XGBoost": xgb_model,
+        "Neural Network (MLP)": mlp_pipeline,
+        # Mô hình thứ 6: Gộp xác suất 70% XGBoost + 30% Neural Network
+        "Ensemble (XGB + MLP)": WeightedEnsembleClassifier(
+            models_weights=[
+                ("XGBoost", xgb_model, 0.7),
+                ("Neural Network", mlp_pipeline, 0.3),
+            ]
         ),
     }
 
@@ -105,7 +166,7 @@ def train_and_compare_models():
     print("=" * 68)
 
     for name, model in models.items():
-        # Fit
+        # Fit (Với Ensemble, xgb_model và mlp_pipeline đã được fit ở các vòng lặp trước đó)
         model.fit(X_train, y_train)
 
         # Predict
@@ -128,7 +189,13 @@ def train_and_compare_models():
         print(f"{name:<24} | {acc * 100:>10.2f}% | {f1_macro:>10.4f} | {loss:>10.4f}")
 
         # Lưu model
-        clean_name = name.lower().replace(" ", "_").replace("(", "").replace(")", "")
+        clean_name = (
+            name.lower()
+            .replace(" ", "_")
+            .replace("(", "")
+            .replace(")", "")
+            .replace("+", "plus")
+        )
         joblib.dump(model, f"models/{clean_name}.joblib")
 
         # Vẽ Confusion Matrix
@@ -160,18 +227,18 @@ def train_and_compare_models():
     with open("models/feature_columns.json", "w", encoding="utf-8") as f:
         json.dump(feature_cols, f, indent=4)
 
-    # Vẽ biểu đồ so sánh Accuracy & F1-Score
-    plt.figure(figsize=(9, 5))
+    # Vẽ biểu đồ so sánh Accuracy & F1-Score (tăng chiều ngang lên 11 để 6 cột không bị đè chữ)
+    plt.figure(figsize=(11, 5.5))
     x_pos = np.arange(len(results_df))
     width = 0.35
 
     plt.bar(x_pos - width / 2, results_df["Accuracy"], width, label="Độ chính xác (Accuracy)", color="#1f77b4")
     plt.bar(x_pos + width / 2, results_df["F1_Macro"], width, label="F1-Macro", color="#2ca02c")
 
-    plt.xlabel("Mô hình Machine Learning")
+    plt.xlabel("Mô hình Machine Learning & Deep Learning")
     plt.ylabel("Điểm đánh giá")
-    plt.title("So sánh hiệu năng 4 mô hình Machine Learning")
-    plt.xticks(x_pos, results_df["Model"])
+    plt.title("So sánh hiệu năng 6 mô hình dự đoán kết quả trận đấu")
+    plt.xticks(x_pos, results_df["Model"], rotation=15)
     plt.ylim(0, 1.0)
     plt.legend()
     plt.grid(axis="y", linestyle="--", alpha=0.7)
