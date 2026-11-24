@@ -45,21 +45,21 @@ def main():
                 continue
 
             print("\nChọn mô hình muốn dùng để dự đoán:")
-            print("  [1] Random Forest")
-            print("  [2] XGBoost")
-            print("  [3] Support Vector Machine (SVM)")
-            print("  [4] Logistic Regression")
+            print("  [1] Ensemble: XGBoost + Neural Network (Khuyên dùng - 51.59%)")
+            print("  [2] Logistic Regression (51.44%)")
+            print("  [3] Random Forest (51.15%)")
+            print("  [4] XGBoost (50.14%)")
             print("  [5] Neural Network (MLP)")
-            print("  [6] Ensemble: XGBoost + Neural Network (Khuyên dùng)")
-            m_choice = input("Chọn mô hình (1-6, bấm Enter mặc định là 6): ").strip()
+            print("  [6] Support Vector Machine (SVM)")
+            m_choice = input("Chọn mô hình (1-6, bấm Enter mặc định là 1): ").strip()
 
             model_map = {
-                "1": "random_forest",
-                "2": "xgboost",
-                "3": "svm_rbf_kernel",
-                "4": "logistic_regression",
+                "1": "ensemble_xgb_plus_mlp",
+                "2": "logistic_regression",
+                "3": "random_forest",
+                "4": "xgboost",
                 "5": "neural_network_mlp",
-                "6": "ensemble_xgb_plus_mlp",
+                "6": "svm_rbf_kernel",
                 "": "ensemble_xgb_plus_mlp",
             }
             selected_model = model_map.get(m_choice, "ensemble_xgb_plus_mlp")

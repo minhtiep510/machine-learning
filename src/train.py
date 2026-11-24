@@ -1,12 +1,16 @@
 import json
 import os
 import sys
+
+# Đảm bảo nhận diện đúng thư mục gốc dự án
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
+
 import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
@@ -33,43 +37,42 @@ if sys.platform == "win32":
         pass
 
 
-# Wrapper tương thích Scikit-Learn để gộp xác suất (Soft Voting) giữa XGBoost và Neural Network
-class WeightedEnsembleClassifier(BaseEstimator, ClassifierMixin):
+class WeightedEnsembleClassifier:
+    """Lớp kết hợp dự đoán Ensemble theo trọng số mềm (Soft Voting)."""
+
     def __init__(self, models_weights):
-        """
-        models_weights: list các tuple (tên_mô_hình, đối_tượng_mô_hình, trọng_số)
-        """
         self.models_weights = models_weights
 
     def fit(self, X, y):
-        # Các mô hình con đã được huấn luyện sẵn trong vòng lặp chính nên không cần fit lại
-        self.classes_ = np.unique(y)
         return self
 
     def predict_proba(self, X):
-        total_proba = None
-        for _, model, weight in self.models_weights:
-            proba = model.predict_proba(X)
-            if total_proba is None:
-                total_proba = weight * proba
+        combined_probs = None
+        total_weight = sum(w for _, _, w in self.models_weights)
+        for name, model, weight in self.models_weights:
+            p = model.predict_proba(X)
+            if combined_probs is None:
+                combined_probs = p * (weight / total_weight)
             else:
-                total_proba += weight * proba
-        return total_proba
+                combined_probs += p * (weight / total_weight)
+        # Chuẩn hóa tổng xác suất = 1
+        combined_probs = combined_probs / np.sum(combined_probs, axis=1, keepdims=True)
+        return combined_probs
 
     def predict(self, X):
-        return np.argmax(self.predict_proba(X), axis=1)
+        probs = self.predict_proba(X)
+        return np.argmax(probs, axis=1)
 
 
 def train_and_compare_models():
-    # 1. Tải và xử lý dữ liệu
-    df = load_and_merge_data("data")
+    # 1. Tải và xử lý toàn bộ dữ liệu 10 mùa giải
+    df = load_and_merge_data()
     df_feat, feature_cols = build_feature_dataset(df, window=5)
 
     X = df_feat[feature_cols].copy()
     y = df_feat["Target"].copy()
 
-    # 2. Phân chia Train/Test theo chuỗi thời gian (Time-Series)
-    # 80% thời gian đầu dùng để huấn luyện, 20% gần nhất dùng để kiểm thử
+    # 2. Phân chia Train/Test theo chuỗi thời gian (Time-Series) chuẩn xác
     split_idx = int(len(df_feat) * 0.8)
     X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
     y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
@@ -81,23 +84,56 @@ def train_and_compare_models():
         f"[THÔNG BÁO] Số mẫu kiểm thử (Test):     {len(X_test)} trận (Các trận tiếp theo trong tương lai)"
     )
 
-    # 3. Khởi tạo 5 mô hình cơ sở (thêm Neural Network MLP)
-    # Target: 0: Chủ nhà thắng (H), 1: Hòa (D), 2: Đội khách thắng (A)
+    # 3. Khởi tạo các mô hình và cấu hình tinh chỉnh
+    lr_pipeline = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("clf", LogisticRegression(max_iter=1000, C=0.05, random_state=42)),
+        ]
+    )
+
+    rf_model = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=7,
+        min_samples_split=6,
+        min_samples_leaf=2,
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    svm_pipeline = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("clf", SVC(kernel="rbf", C=1.0, probability=True, random_state=42)),
+        ]
+    )
+
+    xgb_model = xgb.XGBClassifier(
+        n_estimators=100,
+        max_depth=3,
+        learning_rate=0.03,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=0.5,
+        reg_lambda=1.0,
+        objective="multi:softprob",
+        eval_metric="mlogloss",
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    # Mạng nơ-ron MLP được tinh chỉnh kiến trúc và Early Stopping để chống overfit
     mlp_pipeline = Pipeline(
         [
             ("scaler", StandardScaler()),
             (
-                "clf",
+                "mlp",
                 MLPClassifier(
-                    hidden_layer_sizes=(64, 32),  # 2 lớp ẩn gọn nhẹ chống overfitting
+                    hidden_layer_sizes=(16, 8),
                     activation="relu",
-                    solver="adam",
-                    alpha=0.1,  # L2 regularization mạnh để giảm nhiễu dữ liệu bóng đá
-                    batch_size=32,
-                    learning_rate_init=0.001,
-                    max_iter=300,
-                    early_stopping=True,  # Tự dừng nếu validation loss không giảm
-                    validation_fraction=0.15,
+                    alpha=0.5,
+                    max_iter=600,
+                    early_stopping=True,
                     n_iter_no_change=15,
                     random_state=42,
                 ),
@@ -105,71 +141,37 @@ def train_and_compare_models():
         ]
     )
 
-    xgb_model = xgb.XGBClassifier(
-        n_estimators=150,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        objective="multi:softprob",
-        eval_metric="mlogloss",
-        random_state=42,
-        n_jobs=-1,
+    # Mô hình Ensemble: XGBoost + Mạng nơ-ron (MLP) như ban đầu
+    ensemble_xgb_mlp = WeightedEnsembleClassifier(
+        models_weights=[
+            ("XGBoost", xgb_model, 0.8),
+            ("Neural Network", mlp_pipeline, 0.2),
+        ]
     )
 
     models = {
-        "Logistic Regression": Pipeline(
-            [
-                ("scaler", StandardScaler()),
-                (
-                    "clf",
-                    LogisticRegression(
-                        max_iter=1000,
-                        random_state=42,
-                    ),
-                ),
-            ]
-        ),
-        "Random Forest": RandomForestClassifier(
-            n_estimators=200,
-            max_depth=6,
-            min_samples_split=5,
-            random_state=42,
-            n_jobs=-1,
-        ),
-        "SVM (RBF Kernel)": Pipeline(
-            [
-                ("scaler", StandardScaler()),
-                ("clf", SVC(kernel="rbf", C=1.0, probability=True, random_state=42)),
-            ]
-        ),
+        "Logistic Regression": lr_pipeline,
+        "Random Forest": rf_model,
+        "SVM (RBF Kernel)": svm_pipeline,
         "XGBoost": xgb_model,
         "Neural Network (MLP)": mlp_pipeline,
-        # Mô hình thứ 6: Gộp xác suất 70% XGBoost + 30% Neural Network
-        "Ensemble (XGB + MLP)": WeightedEnsembleClassifier(
-            models_weights=[
-                ("XGBoost", xgb_model, 0.7),
-                ("Neural Network", mlp_pipeline, 0.3),
-            ]
-        ),
+        "Ensemble (XGB + MLP)": ensemble_xgb_mlp,
     }
 
     results = []
     class_names = ["Chủ nhà (H)", "Hòa (D)", "Khách (A)"]
 
-    os.makedirs("models", exist_ok=True)
-    os.makedirs("results", exist_ok=True)
+    os.makedirs(os.path.join(BASE_DIR, "models"), exist_ok=True)
+    os.makedirs(os.path.join(BASE_DIR, "results"), exist_ok=True)
 
     # 4. Huấn luyện và đánh giá từng mô hình
     print("\n" + "=" * 68)
-    print(f"{'MÔ HÌNH':<24} | {'ĐỘ CHÍNH XÁC':<13} | {'F1-MACRO':<10} | {'LOG-LOSS':<10}")
+    print(f"{'MÔ HÌNH':<28} | {'ĐỘ CHÍNH XÁC':<13} | {'F1-MACRO':<10} | {'LOG-LOSS':<10}")
     print("=" * 68)
 
     for name, model in models.items():
-        # Fit (Với Ensemble, xgb_model và mlp_pipeline đã được fit ở các vòng lặp trước đó)
         model.fit(X_train, y_train)
 
-        # Predict
         y_pred = model.predict(X_test)
         y_proba = model.predict_proba(X_test)
 
@@ -186,7 +188,7 @@ def train_and_compare_models():
             }
         )
 
-        print(f"{name:<24} | {acc * 100:>10.2f}% | {f1_macro:>10.4f} | {loss:>10.4f}")
+        print(f"{name:<28} | {acc * 100:>10.2f}% | {f1_macro:>10.4f} | {loss:>10.4f}")
 
         # Lưu model
         clean_name = (
@@ -194,9 +196,11 @@ def train_and_compare_models():
             .replace(" ", "_")
             .replace("(", "")
             .replace(")", "")
+            .replace("[", "")
+            .replace("]", "")
             .replace("+", "plus")
         )
-        joblib.dump(model, f"models/{clean_name}.joblib")
+        joblib.dump(model, os.path.join(BASE_DIR, "models", f"{clean_name}.joblib"))
 
         # Vẽ Confusion Matrix
         cm = confusion_matrix(y_test, y_pred)
@@ -213,21 +217,29 @@ def train_and_compare_models():
         plt.ylabel("Thực tế")
         plt.xlabel("Dự đoán")
         plt.tight_layout()
-        plt.savefig(f"results/confusion_matrix_{clean_name}.png", dpi=200)
+        plt.savefig(
+            os.path.join(BASE_DIR, "results", f"confusion_matrix_{clean_name}.png"),
+            dpi=200,
+        )
         plt.close()
 
     print("=" * 68 + "\n")
 
     # Lưu kết quả bảng so sánh
     results_df = pd.DataFrame(results)
-    results_df.to_csv("results/model_comparison.csv", index=False)
-    print("[THÀNH CÔNG] Đã lưu bảng kết quả so sánh tại 'results/model_comparison.csv'")
+    csv_path = os.path.join(BASE_DIR, "results", "model_comparison.csv")
+    results_df.to_csv(csv_path, index=False)
+    print(f"[THÀNH CÔNG] Đã lưu bảng kết quả so sánh tại '{csv_path}'")
 
     # Lưu feature list
-    with open("models/feature_columns.json", "w", encoding="utf-8") as f:
+    with open(
+        os.path.join(BASE_DIR, "models", "feature_columns.json"),
+        "w",
+        encoding="utf-8",
+    ) as f:
         json.dump(feature_cols, f, indent=4)
 
-    # Vẽ biểu đồ Dashboard so sánh đa chiều (Accuracy, F1-Score & Log-Loss)
+    # Vẽ biểu đồ Dashboard đôi so sánh đa chiều
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
     models_names = results_df["Model"]
@@ -235,38 +247,78 @@ def train_and_compare_models():
     width = 0.35
 
     # Subplot 1: Accuracy & F1-Score
-    ax1.bar(x_pos - width / 2, results_df["Accuracy"] * 100, width, label="Độ chính xác - Accuracy (%)", color="#0284c7")
-    ax1.bar(x_pos + width / 2, results_df["F1_Macro"] * 100, width, label="F1-Macro (x100)", color="#10b981")
+    ax1.bar(
+        x_pos - width / 2,
+        results_df["Accuracy"] * 100,
+        width,
+        label="Độ chính xác - Accuracy (%)",
+        color="#0284c7",
+    )
+    ax1.bar(
+        x_pos + width / 2,
+        results_df["F1_Macro"] * 100,
+        width,
+        label="F1-Macro (x100)",
+        color="#10b981",
+    )
     ax1.set_title("So sánh Accuracy & F1-Score", fontsize=12, fontweight="bold")
     ax1.set_xticks(x_pos)
     ax1.set_xticklabels(models_names, rotation=22, ha="right", fontsize=9)
     ax1.set_ylabel("Tỷ lệ (%)", fontsize=10)
-    ax1.set_ylim(0, 60)
+    ax1.set_ylim(0, 65)
     ax1.grid(axis="y", linestyle="--", alpha=0.6)
     ax1.legend(loc="upper left")
 
     for i, v in enumerate(results_df["Accuracy"]):
-        ax1.text(i - width / 2, v * 100 + 0.7, f"{v * 100:.1f}%", ha="center", fontsize=8.5, fontweight="bold")
+        ax1.text(
+            i - width / 2,
+            v * 100 + 0.7,
+            f"{v * 100:.1f}%",
+            ha="center",
+            fontsize=8.5,
+            fontweight="bold",
+        )
     for i, v in enumerate(results_df["F1_Macro"]):
-        ax1.text(i + width / 2, v * 100 + 0.7, f"{v * 100:.1f}%", ha="center", fontsize=8.5, fontweight="bold")
+        ax1.text(
+            i + width / 2,
+            v * 100 + 0.7,
+            f"{v * 100:.1f}%",
+            ha="center",
+            fontsize=8.5,
+            fontweight="bold",
+        )
 
     # Subplot 2: Log-Loss (Càng thấp càng tốt)
     min_loss = results_df["Log_Loss"].min()
-    colors = ["#22c55e" if v == min_loss else "#0ea5e9" for v in results_df["Log_Loss"]]
+    colors = [
+        "#22c55e" if v == min_loss else "#0ea5e9" for v in results_df["Log_Loss"]
+    ]
     bars = ax2.bar(x_pos, results_df["Log_Loss"], color=colors, width=0.55)
-    ax2.set_title("So sánh Log-Loss (Cột xanh lá là tối ưu nhất)", fontsize=12, fontweight="bold")
+    ax2.set_title(
+        "So sánh Log-Loss (Cột xanh lá là tối ưu nhất)",
+        fontsize=12,
+        fontweight="bold",
+    )
     ax2.set_xticks(x_pos)
     ax2.set_xticklabels(models_names, rotation=22, ha="right", fontsize=9)
     ax2.set_ylabel("Log-Loss", fontsize=10)
-    ax2.set_ylim(min_loss * 0.9, results_df["Log_Loss"].max() * 1.05)
+    ax2.set_ylim(min_loss * 0.95, results_df["Log_Loss"].max() * 1.05)
     ax2.grid(axis="y", linestyle="--", alpha=0.6)
 
     for bar in bars:
         yval = bar.get_height()
-        ax2.text(bar.get_x() + bar.get_width() / 2.0, yval + 0.003, f"{yval:.4f}", ha="center", fontsize=8.5, fontweight="bold")
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            yval + 0.002,
+            f"{yval:.4f}",
+            ha="center",
+            fontsize=8.5,
+            fontweight="bold",
+        )
 
     plt.tight_layout()
-    plt.savefig("results/model_benchmark_barchart.png", dpi=200)
+    chart_path = os.path.join(BASE_DIR, "results", "model_benchmark_barchart.png")
+    plt.savefig(chart_path, dpi=200)
     plt.close()
 
     return results_df
