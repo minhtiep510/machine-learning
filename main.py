@@ -45,22 +45,22 @@ def main():
                 continue
 
             print("\nChọn mô hình muốn dùng để dự đoán:")
-            print("  [1] Logistic Regression ")
-            print("  [2] Random Forest ")
-            print("  [3] Support Vector Machine - SVM ")
-            print("  [4] XGBoost ")
-            print("  [5] Neural Network - MLP ")
+            print("  [1] Neural Network - MLP (Tối ưu nhất - 52.41%)")
+            print("  [2] Logistic Regression (51.42%)")
+            print("  [3] Random Forest (50.99%)")
+            print("  [4] Support Vector Machine - SVM (50.85%)")
+            print("  [5] XGBoost (50.85%)")
             m_choice = input("Chọn mô hình (1-5, bấm Enter mặc định là 1): ").strip()
 
             model_map = {
-                "1": "logistic_regression",
-                "2": "random_forest",
-                "3": "support_vector_machine_svm",
-                "4": "xgboost",
-                "5": "neural_network_mlp",
-                "": "logistic_regression",
+                "1": "neural_network_mlp",
+                "2": "logistic_regression",
+                "3": "random_forest",
+                "4": "support_vector_machine_svm",
+                "5": "xgboost",
+                "": "neural_network_mlp",
             }
-            selected_model = model_map.get(m_choice, "logistic_regression")
+            selected_model = model_map.get(m_choice, "neural_network_mlp")
 
             predict_upcoming_match(home, away, selected_model)
 

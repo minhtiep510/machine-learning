@@ -106,10 +106,11 @@ def train_and_compare_models():
                 (
                     "mlp",
                     MLPClassifier(
-                        hidden_layer_sizes=(16, 8),
-                        activation="relu",
-                        alpha=0.5,
-                        max_iter=600,
+                        hidden_layer_sizes=(16,),
+                        activation="tanh",
+                        alpha=9.0,
+                        learning_rate_init=0.005,
+                        max_iter=500,
                         early_stopping=True,
                         n_iter_no_change=15,
                         random_state=42,
