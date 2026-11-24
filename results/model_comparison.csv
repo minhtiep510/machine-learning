@@ -1,7 +1,6 @@
 Model,Accuracy,F1_Macro,Log_Loss
 Logistic Regression,0.5142,0.4036,1.0129
 Random Forest,0.5099,0.3829,1.0092
-SVM (RBF Kernel),0.5085,0.3831,1.019
+Support Vector Machine (SVM),0.5085,0.3831,1.019
 XGBoost,0.5085,0.3811,1.0049
 Neural Network (MLP),0.5042,0.3805,1.0084
-Ensemble (XGB + MLP),0.5127,0.3823,1.0023
