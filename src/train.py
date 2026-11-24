@@ -227,21 +227,44 @@ def train_and_compare_models():
     with open("models/feature_columns.json", "w", encoding="utf-8") as f:
         json.dump(feature_cols, f, indent=4)
 
-    # Vẽ biểu đồ so sánh Accuracy & F1-Score (tăng chiều ngang lên 11 để 6 cột không bị đè chữ)
-    plt.figure(figsize=(11, 5.5))
-    x_pos = np.arange(len(results_df))
+    # Vẽ biểu đồ Dashboard so sánh đa chiều (Accuracy, F1-Score & Log-Loss)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+    models_names = results_df["Model"]
+    x_pos = np.arange(len(models_names))
     width = 0.35
 
-    plt.bar(x_pos - width / 2, results_df["Accuracy"], width, label="Độ chính xác (Accuracy)", color="#1f77b4")
-    plt.bar(x_pos + width / 2, results_df["F1_Macro"], width, label="F1-Macro", color="#2ca02c")
+    # Subplot 1: Accuracy & F1-Score
+    ax1.bar(x_pos - width / 2, results_df["Accuracy"] * 100, width, label="Độ chính xác - Accuracy (%)", color="#0284c7")
+    ax1.bar(x_pos + width / 2, results_df["F1_Macro"] * 100, width, label="F1-Macro (x100)", color="#10b981")
+    ax1.set_title("So sánh Accuracy & F1-Score", fontsize=12, fontweight="bold")
+    ax1.set_xticks(x_pos)
+    ax1.set_xticklabels(models_names, rotation=22, ha="right", fontsize=9)
+    ax1.set_ylabel("Tỷ lệ (%)", fontsize=10)
+    ax1.set_ylim(0, 60)
+    ax1.grid(axis="y", linestyle="--", alpha=0.6)
+    ax1.legend(loc="upper left")
 
-    plt.xlabel("Mô hình Machine Learning & Deep Learning")
-    plt.ylabel("Điểm đánh giá")
-    plt.title("So sánh hiệu năng 6 mô hình dự đoán kết quả trận đấu")
-    plt.xticks(x_pos, results_df["Model"], rotation=15)
-    plt.ylim(0, 1.0)
-    plt.legend()
-    plt.grid(axis="y", linestyle="--", alpha=0.7)
+    for i, v in enumerate(results_df["Accuracy"]):
+        ax1.text(i - width / 2, v * 100 + 0.7, f"{v * 100:.1f}%", ha="center", fontsize=8.5, fontweight="bold")
+    for i, v in enumerate(results_df["F1_Macro"]):
+        ax1.text(i + width / 2, v * 100 + 0.7, f"{v * 100:.1f}%", ha="center", fontsize=8.5, fontweight="bold")
+
+    # Subplot 2: Log-Loss (Càng thấp càng tốt)
+    min_loss = results_df["Log_Loss"].min()
+    colors = ["#22c55e" if v == min_loss else "#0ea5e9" for v in results_df["Log_Loss"]]
+    bars = ax2.bar(x_pos, results_df["Log_Loss"], color=colors, width=0.55)
+    ax2.set_title("So sánh Log-Loss (Cột xanh lá là tối ưu nhất)", fontsize=12, fontweight="bold")
+    ax2.set_xticks(x_pos)
+    ax2.set_xticklabels(models_names, rotation=22, ha="right", fontsize=9)
+    ax2.set_ylabel("Log-Loss", fontsize=10)
+    ax2.set_ylim(min_loss * 0.9, results_df["Log_Loss"].max() * 1.05)
+    ax2.grid(axis="y", linestyle="--", alpha=0.6)
+
+    for bar in bars:
+        yval = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width() / 2.0, yval + 0.003, f"{yval:.4f}", ha="center", fontsize=8.5, fontweight="bold")
+
     plt.tight_layout()
     plt.savefig("results/model_benchmark_barchart.png", dpi=200)
     plt.close()
